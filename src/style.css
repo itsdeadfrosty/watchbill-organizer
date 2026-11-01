@@ -49,7 +49,9 @@ button.link { min-height: 0; padding: 0 6px; border: none; background: none; col
 button.wide { width: 100%; }
 button:disabled { opacity: .45; cursor: default; }
 @media (pointer: coarse) { button { min-height: 40px; } button.sm { min-height: 34px; } }
-input, select { font: inherit; width: 100%; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--card); color: var(--text); margin-top: 4px; min-height: 38px; }
+input, select { font: inherit; width: 100%; padding: 8px 10px; border-radius: 8px; border: none; background: var(--bg); color: var(--text); margin-top: 4px; min-height: 38px; }
+input::placeholder { color: var(--muted); opacity: .8; }
+input[type=file] { background: none; padding-left: 0; }
 input:focus, select:focus, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 label { display: block; font-size: 13px; font-weight: 600; margin-bottom: 10px; color: var(--muted); }
 label.check { display: flex; gap: 8px; align-items: center; color: var(--text); font-weight: 500; }

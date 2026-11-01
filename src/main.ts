@@ -123,6 +123,19 @@ function revisionOf(date: string): { n: number; reason?: string } {
 
 // ---------- rendering ----------
 
+/** Stop browsers and password managers from filling saved names, phones or addresses into our boxes. */
+function hardenInputs() {
+  let n = 0;
+  for (const el of app.querySelectorAll<HTMLElement>('input:not([type=password]):not([type=file]):not([type=checkbox]):not([hidden]), textarea')) {
+    el.setAttribute('autocomplete', 'off');
+    el.setAttribute('autocorrect', 'off');
+    el.setAttribute('data-1p-ignore', '');
+    el.setAttribute('data-lpignore', 'true');
+    el.setAttribute('data-bwignore', 'true');
+    el.setAttribute('name', `wo-field-${n++}`);
+  }
+}
+
 function render() {
   if (!ui.session) return renderLogin();
   const built = plannedDates().length > 0;
@@ -131,7 +144,7 @@ function render() {
   <header class="top">
     <div class="brand">602 Watchbill</div>
     <div id="status" class="status">${esc(ui.saved)}</div>
-    <button class="sm ghost" data-act="lock">Lock</button>
+    <button class="sm primary" data-act="generate" ${active().length ? '' : 'disabled'}>Build</button>
   </header>
   <nav class="tabs">${TABS.map(([t, l]) => {
     const off = t === 'changes' && !built;
@@ -139,6 +152,7 @@ function render() {
   }).join('')}</nav>
   ${ui.message ? `<div class="message"><span>${esc(ui.message)}</span><button class="link" data-act="dismiss">×</button></div>` : ''}
   <main class="view">${views[ui.tab]()}</main>`;
+  hardenInputs();
   fitSheets();
 }
 
@@ -174,6 +188,7 @@ function renderLogin() {
       </details>
     </div>
   </div>`;
+  hardenInputs();
   document.querySelector('#login')!.addEventListener('submit', async (e) => {
     e.preventDefault();
     const code = (document.querySelector('#code') as HTMLInputElement).value;
@@ -427,7 +442,8 @@ function settingsTab(): string {
       <label>Type DELETE to confirm<input id="confirm-delete" autocomplete="off"></label>
       <div class="actions"><button class="danger" data-act="delete-profile">Delete</button></div>
     </details>
-  </section>`;
+  </section>
+  <div class="actions"><button class="ghost" data-act="lock">Lock</button></div>`;
 }
 
 /** Scale the fixed-size printed pages down to fit the screen. */
@@ -700,6 +716,7 @@ app.addEventListener('click', async (e) => {
     case 'generate': {
       const dates = dateRange(ui.start, ui.end > ui.start ? ui.end : ui.start);
       p.prefsChanged = false;
+      ui.tab = 'bill';
       runSolve(dates, `Built ${militaryDate(dates[0])}${dates.length > 1 ? `–${militaryDate(dates[dates.length - 1])}` : ''}`);
       return render();
     }
