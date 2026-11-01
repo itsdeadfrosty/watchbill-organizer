@@ -24,16 +24,17 @@ export function normalizeCode(code: string): string {
   return code.toUpperCase().replace(/[^A-Z0-9]/g, '');
 }
 
-/** 16 characters, about 80 bits, shown as ABCD-EFGH-JKLM-NPQR. */
+/** 6 characters, about 30 bits, shown as ABC-123. Argon2 makes each guess slow. */
 export function generateCode(): string {
-  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  const bytes = crypto.getRandomValues(new Uint8Array(6));
   const raw = Array.from(bytes, (b) => ALPHABET[b & 31]).join('');
-  return raw.match(/.{4}/g)!.join('-');
+  return `${raw.slice(0, 3)}-${raw.slice(3)}`;
 }
 
+/** 6 characters; 16-character codes from before the switch still open. */
 export function isValidCode(code: string): boolean {
   const n = normalizeCode(code);
-  return n.length === 16 && [...n].every((c) => ALPHABET.includes(c));
+  return (n.length === 6 || n.length === 16) && [...n].every((c) => ALPHABET.includes(c));
 }
 
 export function randomSalt(): Uint8Array {

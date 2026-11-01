@@ -150,7 +150,7 @@ function renderLogin() {
     <p class="muted">Everything is saved encrypted on this device only. Without the save code the data can't be read, even by someone holding the device.</p>
     <form id="login">
       <input type="text" name="username" autocomplete="username" value="watchbill" hidden>
-      <label>Save code<input id="code" name="password" type="password" autocomplete="current-password" autocapitalize="characters" spellcheck="false" placeholder="ABCD-EFGH-JKLM-NPQR"></label>
+      <label>Save code<input id="code" name="password" type="password" autocomplete="current-password" autocapitalize="characters" spellcheck="false" placeholder="ABC-123"></label>
       <button class="primary" ${ui.busy ? 'disabled' : ''}>${ui.busy || 'Open'}</button>
     </form>
     ${ui.message ? `<p class="error">${esc(ui.message)}</p>` : ''}
@@ -166,7 +166,7 @@ function renderLogin() {
     e.preventDefault();
     const code = (document.querySelector('#code') as HTMLInputElement).value;
     if (!isValidCode(code)) {
-      ui.message = 'That is not a valid save code (16 letters and numbers).';
+      ui.message = 'That is not a valid save code (6 letters and numbers, like ABC-123).';
       return render();
     }
     ui.busy = 'Unlocking…';

@@ -4,9 +4,11 @@ import { makeBackup, readBackup } from '../src/storage';
 import { emptyProfile } from '../src/model';
 
 describe('encryption', () => {
-  it('generates readable 16-character codes', () => {
+  it('generates readable 6-character codes', () => {
     const c = generateCode();
-    expect(c).toMatch(/^[A-Z2-9]{4}(-[A-Z2-9]{4}){3}$/);
+    expect(c).toMatch(/^[A-Z2-9]{3}-[A-Z2-9]{3}$/);
+    expect(isValidCode('ABCD-EFGH-JKLM-NPQR')).toBe(true);
+    expect(isValidCode('ABC-12')).toBe(false);
     expect(isValidCode(c.toLowerCase().replace(/-/g, ' '))).toBe(true);
   });
 
