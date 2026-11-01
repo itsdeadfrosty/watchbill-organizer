@@ -132,7 +132,11 @@ dialog .pick { max-height: 50vh; overflow-y: auto; margin: 8px 0; }
 
 @media (max-width: 720px) {
   .split { grid-template-columns: 1fr; }
-  .split .names { position: static; max-height: 220px; }
+  .split .names { position: static; max-height: none; overflow: visible; padding: 10px; }
+  .names .pick { display: flex; flex-wrap: wrap; gap: 6px; }
+  .names .pick button { border: 1px solid var(--line); padding: 5px 10px; width: auto; }
+  .names .pick button.on { border-color: var(--accent); }
+  .names .pick small { display: none; }
   .form2 { grid-template-columns: 1fr; }
   .people li { grid-template-columns: 1fr 76px auto; }
   .addrow { grid-template-columns: 1fr 76px 44px; }
@@ -179,7 +183,7 @@ dialog .pick { max-height: 50vh; overflow-y: auto; margin: 8px 0; }
 .sheet .slot { display: grid; grid-template-columns: .92in 1fr 1.02in .82in; gap: 12px; align-items: end; }
 .sheet .role { background: var(--fill); font-size: 11px; font-weight: 800; padding: 4px 6px; clip-path: polygon(0 0, 88% 0, 100% 50%, 88% 100%, 0 100%); line-height: 1.05; }
 .sheet .role small { display: block; font-size: 7px; font-weight: 700; color: var(--soft); }
-.sheet .field { border-bottom: 1.2px solid #444; padding: 0 2px 2px; min-height: 22px; display: flex; align-items: flex-end; gap: 6px; overflow: hidden; }
+.sheet .field { padding: 0 2px 2px; min-height: 22px; display: flex; align-items: flex-end; gap: 6px; overflow: hidden; }
 .sheet .field .k { flex: none; padding-bottom: 2px; }
 .sheet .field.room { font-size: 13px; font-weight: 500; white-space: nowrap; }
 .sheet .nm { font-size: 15px; font-weight: 600; line-height: 1.1; min-width: 0; flex: 1; overflow-wrap: anywhere; }
@@ -189,7 +193,7 @@ dialog .pick { max-height: 50vh; overflow-y: auto; margin: 8px 0; }
 .sheet .side { display: flex; flex-direction: column; gap: 9px; border-left: 1.5px solid var(--rule); padding-left: .16in; min-height: 0; overflow: hidden; }
 .sheet .side h4 { margin: 0 0 5px; background: var(--fill); font-size: 10px; font-weight: 800; letter-spacing: .6px; padding: 3px 7px; }
 .sheet .sup { margin-bottom: 6px; }
-.sheet .sname { display: flex; align-items: flex-end; gap: 6px; border-bottom: 1.2px solid #444; min-height: 20px; padding: 0 2px 1px; }
+.sheet .sname { display: flex; align-items: flex-end; gap: 6px; min-height: 20px; padding: 0 2px 1px; }
 .sheet .sname .nm { font-size: 13.5px; }
 .sheet .smeta { display: flex; justify-content: space-between; font-size: 9px; color: var(--soft); margin-top: 2px; }
 .sheet .smeta b { color: var(--ink); }

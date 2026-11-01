@@ -60,7 +60,7 @@ export function renderBill(bill: DayBill, profile: Profile, opts: BillOptions): 
         <div class="role">${POS_LABEL[pos]}<small>${pos === 'moow' ? 'NSU' : 'NWU'}</small></div>
         <div class="field name"${tap(`${b}|${pos}`)}><span class="nm">${esc(p?.name ?? '')}</span>${tags(cell)}</div>
         <div class="field room"><span class="k">Room</span>${esc(p?.room ?? '')}</div>
-        <div class="field int"><span class="k">Int</span></div>
+        <div class="field int"><span class="k">Initials</span></div>
       </div>`;
     }).join('');
     return `<section class="block">
@@ -73,7 +73,7 @@ export function renderBill(bill: DayBill, profile: Profile, opts: BillOptions): 
     const p = person(cell);
     return `<div class="sup"><div class="k">${label} <small>${uniform}</small></div>
       <div class="sname"${tap(ref)}><span class="nm">${esc(p?.name ?? '')}</span>${tags(cell)}</div>
-      <div class="smeta"><span>Room <b>${esc(p?.room ?? '')}</b></span><span>Int ______</span></div></div>`;
+      <div class="smeta"><span>Room <b>${esc(p?.room ?? '')}</b></span><span>Initials</span></div></div>`;
   };
   const line = (k: string, v: string, phone = '') =>
     `<div class="kv"><span class="k">${k}</span><span class="v">${esc(v)}</span>${phone ? `<span class="ph">${esc(phone)}</span>` : ''}</div>`;

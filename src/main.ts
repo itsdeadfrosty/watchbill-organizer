@@ -635,6 +635,13 @@ app.addEventListener('click', async (e) => {
     return render();
   }
 
+  // Let the button react before the (briefly blocking) solve runs.
+  if (['generate', 'apply-prefs', 'add-appt', 'add-double'].includes(d.act ?? '')) {
+    (btn as HTMLButtonElement).disabled = true;
+    btn.textContent = 'Working…';
+    await new Promise((r) => requestAnimationFrame(() => setTimeout(r, 0)));
+  }
+
   switch (d.act) {
     case 'dismiss':
       ui.message = '';
@@ -813,4 +820,22 @@ function doubleHint() {
 }
 
 window.addEventListener('afterprint', () => (printArea.innerHTML = ''));
+
+/** GitHub Pages caches the page for up to 10 minutes; fetch it fresh and switch to a newer build on its own. */
+async function checkForUpdate() {
+  try {
+    const mine = [...document.scripts].map((s) => s.src).find((s) => /\/assets\/index-[\w-]+\.js/.test(s));
+    if (!mine) return;
+    const html = await (await fetch(`${location.pathname}?v=${Date.now()}`, { cache: 'no-store' })).text();
+    const latest = html.match(/assets\/index-[\w-]+\.js/)?.[0];
+    if (!latest || mine.endsWith(latest)) return;
+    if (!ui.session) return location.reload();
+    ui.message = 'A new version is ready. It will load the next time you lock or reopen.';
+    render();
+  } catch {
+    /* offline: keep going */
+  }
+}
+document.addEventListener('visibilitychange', () => document.visibilityState === 'visible' && checkForUpdate());
+checkForUpdate();
 render();
