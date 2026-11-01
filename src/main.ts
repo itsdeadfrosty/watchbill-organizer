@@ -2,20 +2,20 @@ import './style.css';
 import { esc, fitNames, renderBill } from './bill';
 import { deriveKeys, generateCode, isValidCode, type Keys } from './crypto';
 import { addDays, dateRange, longDate, militaryDate, today, WEEKDAYS } from './dates';
-import { BLOCKS, emptyProfile, newId, newPerson, POS_LABEL, type Bills, type Cell, type DayBill, type Person, type Pos } from './model';
+import { BLOCKS, emptyProfile, migrate, newId, newPerson, POS_LABEL, type Bills, type Cell, type DayBill, type Person, type Pos } from './model';
 import { counts, replacements, solve, type Role } from './scheduler';
 import { askPersistent, DeviceStore, makeBackup, readBackup, save, unlock, type BackupFile } from './storage';
 
-type Tab = 'bill' | 'roster' | 'prefs' | 'changes' | 'setup' | 'history' | 'backup';
+type Tab = 'roster' | 'prefs' | 'bill' | 'changes' | 'history' | 'settings';
 const TABS: [Tab, string][] = [
-  ['bill', 'Bill'],
   ['roster', 'Roster'],
   ['prefs', 'Preferences'],
-  ['changes', 'Appointments'],
-  ['setup', 'Leads & notes'],
+  ['bill', 'Build'],
+  ['changes', 'Changes'],
   ['history', 'History'],
-  ['backup', 'Backup'],
+  ['settings', 'Settings'],
 ];
+const BLOCK_NAMES = ['Morning', 'Afternoon', 'Evening', 'Night'];
 
 const store = new DeviceStore();
 const app = document.querySelector<HTMLDivElement>('#app')!;
@@ -24,12 +24,15 @@ const printArea = document.querySelector<HTMLDivElement>('#print-area')!;
 const ui = {
   session: null as null | { code: string; keys: Keys },
   profile: emptyProfile(),
-  tab: 'bill' as Tab,
+  tab: 'roster' as Tab,
   start: today(),
   end: addDays(today(), 6),
   warnings: [] as string[],
   person: null as string | null,
-  viewRevision: null as string | null,
+  editing: null as string | null,
+  changesMode: 'appt' as 'appt' | 'double' | 'swap',
+  swapDate: '',
+  apptBlocks: [] as number[],
   newCode: null as string | null,
   busy: '',
   saved: '',
@@ -47,12 +50,12 @@ function changed() {
   saveTimer = window.setTimeout(async () => {
     try {
       await save(store, ui.session!.keys, ui.profile);
-      ui.saved = 'Saved on this device';
+      ui.saved = 'Saved';
     } catch (e) {
       ui.saved = `Save failed: ${(e as Error).message}`;
     }
     setStatus();
-  }, 600);
+  }, 500);
 }
 
 function setStatus() {
@@ -62,12 +65,11 @@ function setStatus() {
 
 // ---------- scheduling helpers ----------
 
+const active = () => ui.profile.people.filter((p) => p.active);
+const plannedDates = () => Object.keys(ui.profile.bills).sort();
+
 function name(id: string | null | undefined): string {
   return ui.profile.people.find((p) => p.id === id)?.name ?? '(nobody)';
-}
-
-function plannedDates(): string[] {
-  return Object.keys(ui.profile.bills).sort();
 }
 
 function sameBill(a?: DayBill, b?: DayBill) {
@@ -76,8 +78,9 @@ function sameBill(a?: DayBill, b?: DayBill) {
 
 function commit(newBills: Bills, reason: string, warnings: string[] = []) {
   const p = ui.profile;
-  const dates = Object.keys(newBills).sort();
-  const changedDates = dates.filter((d) => !sameBill(p.bills[d], newBills[d]));
+  const changedDates = Object.keys(newBills)
+    .sort()
+    .filter((d) => !sameBill(p.bills[d], newBills[d]));
   p.bills = { ...p.bills, ...newBills };
   if (changedDates.length) {
     p.history.push({
@@ -90,28 +93,31 @@ function commit(newBills: Bills, reason: string, warnings: string[] = []) {
     });
   }
   ui.warnings = warnings;
-  ui.message = changedDates.length ? `${reason}: ${changedDates.length} day(s) updated.` : `${reason}: no changes needed.`;
+  ui.message = changedDates.length ? `${reason}: ${changedDates.length} day(s) updated.` : `${reason}: nothing needed to change.`;
   changed();
 }
 
 function runSolve(dates: string[], reason: string) {
-  if (!dates.length) {
-    ui.message = `${reason}. No planned bills from that date on, so nothing to re-solve.`;
-    changed();
-    return;
-  }
   const p = ui.profile;
+  if (!dates.length) {
+    ui.message = `${reason}. No bills from that date on, so nothing changed.`;
+    return changed();
+  }
   const res = solve({ dates, people: p.people, appointments: p.appointments, doubles: p.doubles, bills: p.bills, seed: p.seed });
   commit(res.bills, reason, res.warnings);
 }
 
-/** Re-solve every planned day from `date` forward; earlier days stay fixed. */
+/** Re-solve every built day from `date` forward; earlier days stay fixed. */
 function resolveFrom(date: string, reason: string) {
   runSolve(plannedDates().filter((d) => d >= date), reason);
 }
 
+function revisionsOf(date: string) {
+  return ui.profile.history.filter((h) => h.dates.includes(date));
+}
+
 function revisionOf(date: string): { n: number; reason?: string } {
-  const revs = ui.profile.history.filter((h) => h.dates.includes(date));
+  const revs = revisionsOf(date);
   return { n: Math.max(0, revs.length - 1), reason: revs.length > 1 ? revs[revs.length - 1].reason.split(':')[0] : undefined };
 }
 
@@ -119,15 +125,20 @@ function revisionOf(date: string): { n: number; reason?: string } {
 
 function render() {
   if (!ui.session) return renderLogin();
+  const built = plannedDates().length > 0;
+  const views: Record<Tab, () => string> = { roster: rosterTab, prefs: prefsTab, bill: billTab, changes: changesTab, history: historyTab, settings: settingsTab };
   app.innerHTML = `
   <header class="top">
-    <div class="brand">Watchbill Organizer</div>
+    <div class="brand">602 Watchbill</div>
     <div id="status" class="status">${esc(ui.saved)}</div>
-    <button class="ghost" data-act="lock">Lock</button>
+    <button class="sm ghost" data-act="lock">Lock</button>
   </header>
-  <nav class="tabs">${TABS.map(([t, l]) => `<button class="${ui.tab === t ? 'on' : ''}" data-tab="${t}">${l}</button>`).join('')}</nav>
-  ${ui.message ? `<div class="message">${esc(ui.message)} <button class="link" data-act="dismiss">dismiss</button></div>` : ''}
-  <main>${{ bill: billTab, roster: rosterTab, prefs: prefsTab, changes: changesTab, setup: setupTab, history: historyTab, backup: backupTab }[ui.tab]()}</main>`;
+  <nav class="tabs">${TABS.map(([t, l]) => {
+    const off = t === 'changes' && !built;
+    return `<button class="${ui.tab === t ? 'on' : ''}" data-tab="${t}" ${off ? 'disabled title="Build a bill first"' : ''}>${l}</button>`;
+  }).join('')}</nav>
+  ${ui.message ? `<div class="message"><span>${esc(ui.message)}</span><button class="link" data-act="dismiss">×</button></div>` : ''}
+  <main class="view">${views[ui.tab]()}</main>`;
   fitSheets();
 }
 
@@ -136,9 +147,9 @@ function renderLogin() {
     app.innerHTML = `<div class="login card">
       <h1>Your save code</h1>
       <p class="code">${ui.newCode}</p>
-      <p><b>Write this down now.</b> It is the only way to open your data. It is never stored, so if you lose it there is no recovery.</p>
-      <label class="check"><input type="checkbox" id="wrote"> I wrote it down</label>
-      <button class="primary" data-act="start-new" disabled id="go">Continue</button>
+      <p>Write it down or save it in your password manager. It is the only way to open your data and it can't be recovered.</p>
+      <label class="check"><input type="checkbox" id="wrote"> I saved it</label>
+      <button class="primary wide" data-act="start-new" disabled id="go">Continue</button>
     </div>`;
     document.querySelector('#wrote')!.addEventListener('change', (e) => {
       (document.querySelector('#go') as HTMLButtonElement).disabled = !(e.target as HTMLInputElement).checked;
@@ -146,21 +157,22 @@ function renderLogin() {
     return;
   }
   app.innerHTML = `<div class="login card">
-    <h1>Watchbill Organizer</h1>
-    <p class="muted">Everything is saved encrypted on this device only. Without the save code the data can't be read, even by someone holding the device.</p>
+    <h1>602 Watchbill</h1>
+    <p class="muted">Saved encrypted on this device only.</p>
     <form id="login">
       <input type="text" name="username" autocomplete="username" value="watchbill" hidden>
       <label>Save code<input id="code" name="password" type="password" autocomplete="current-password" autocapitalize="characters" spellcheck="false" placeholder="ABC-123"></label>
-      <button class="primary" ${ui.busy ? 'disabled' : ''}>${ui.busy || 'Open'}</button>
+      <button class="primary wide" ${ui.busy ? 'disabled' : ''}>${ui.busy || 'Open'}</button>
     </form>
     ${ui.message ? `<p class="error">${esc(ui.message)}</p>` : ''}
-    <hr>
-    <button data-act="create">Create new profile</button>
-    <details><summary>Restore from a backup file</summary>
-      <label>Backup file<input type="file" id="restore-file" accept=".json,application/json"></label>
-      <label>Save code for that backup<input id="restore-code" autocomplete="off" spellcheck="false"></label>
-      <button data-act="restore-login">Restore</button>
-    </details>
+    <div class="login-links">
+      <button class="ghost" data-act="create">Create new profile</button>
+      <details><summary>Restore from a backup file</summary>
+        <label>Backup file<input type="file" id="restore-file" accept=".json,application/json"></label>
+        <label>Save code for that backup<input id="restore-code" autocomplete="off" spellcheck="false"></label>
+        <button data-act="restore-login">Restore</button>
+      </details>
+    </div>
   </div>`;
   document.querySelector('#login')!.addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -179,53 +191,110 @@ function renderLogin() {
       return render();
     }
     ui.session = { code, keys: res.keys };
-    ui.profile = res.profile;
-    ui.saved = 'Opened';
+    ui.profile = migrate(res.profile);
+    ui.tab = plannedDates().length ? 'bill' : 'roster';
+    ui.saved = '';
     askPersistent();
     render();
   });
 }
 
-function sheetsFor(dates: string[], bills: Bills, interactive: boolean, revisionOverride?: string) {
-  return dates
-    .filter((d) => bills[d])
-    .map((d) => {
-      const r = revisionOverride ? { n: 0, reason: revisionOverride } : revisionOf(d);
-      return `<div class="sheet-wrap">${renderBill(bills[d], ui.profile, { revision: r.n, revisionReason: r.reason, interactive })}</div>`;
-    })
-    .join('');
+function sheet(date: string, bills: Bills, interactive: boolean, revisionOverride?: string) {
+  const r = revisionOverride ? { n: 0, reason: revisionOverride } : revisionOf(date);
+  return `<div class="sheet-wrap">${renderBill(bills[date], ui.profile, { revision: r.n, revisionReason: r.reason, interactive })}</div>`;
 }
+
+// Roster
+
+function rosterTab(): string {
+  const people = active();
+  const former = ui.profile.people.filter((p) => !p.active);
+  const row = (x: Person) =>
+    ui.editing === x.id
+      ? `<li class="editing"><input id="e-name" value="${esc(x.name)}" aria-label="Name"><input id="e-room" class="room-in" value="${esc(x.room)}" aria-label="Room">
+         <button class="sm primary" data-act="save-person">Save</button><button class="sm ghost danger" data-act="remove-person">Remove</button></li>`
+      : `<li><span class="pn">${esc(x.name)}</span><span class="pr">${esc(x.room)}</span><button class="sm ghost" data-edit="${x.id}">Edit</button></li>`;
+  return `<section class="card">
+    <div class="head"><h2>Roster</h2><span class="muted">${people.length} ${people.length === 1 ? 'person' : 'people'}</span></div>
+    <form id="add-person" class="addrow">
+      <input id="n" placeholder="Name (e.g. DOE, J.)" autocomplete="off" aria-label="Name">
+      <input id="r" class="room-in" placeholder="Room" autocomplete="off" aria-label="Room">
+      <button class="primary add" aria-label="Add">+</button>
+    </form>
+    ${people.length ? `<ul class="people">${people.map(row).join('')}</ul>` : '<p class="muted">Add everyone in the duty section. At least 9 people are needed for everyone to get 12 hours of rest.</p>'}
+    ${former.length ? `<details class="former"><summary>${former.length} removed (kept for history)</summary><ul class="people">${former
+      .map((x) => `<li><span class="pn">${esc(x.name)}</span><span class="pr">${esc(x.room)}</span><button class="sm ghost" data-restore="${x.id}">Restore</button></li>`)
+      .join('')}</ul></details>` : ''}
+  </section>`;
+}
+
+// Preferences
+
+function prefSummary(p: Person): string {
+  const parts: string[] = [];
+  if (p.pref.blocks.length) parts.push(p.pref.blocks.map((b) => BLOCK_NAMES[b]).join(', '));
+  if (p.pref.pos) parts.push(p.pref.pos === 'moow' ? 'MOOW' : 'Rover');
+  if (p.pref.days.length) parts.push(p.pref.days.map((d) => WEEKDAYS[d].slice(0, 2)).join(' '));
+  return parts.join(' · ');
+}
+
+function toggles(group: string, items: string[], on: (i: number) => boolean, sub?: string[]) {
+  return `<div class="toggles">${items
+    .map((l, i) => `<button class="${on(i) ? 'on' : ''}" data-toggle="${group}" data-i="${i}" aria-pressed="${on(i)}">${l}${sub ? `<small>${sub[i]}</small>` : ''}</button>`)
+    .join('')}</div>`;
+}
+
+function prefsTab(): string {
+  const people = active();
+  const sel = people.find((x) => x.id === ui.person);
+  if (!people.length) return '<section class="card"><p class="muted">Add people on the Roster tab first.</p></section>';
+  return `<div class="split">
+    <section class="card names">
+      <ul class="pick">${people
+        .map((x) => `<li><button class="${x.id === ui.person ? 'on' : ''}" data-person="${x.id}"><span>${esc(x.name)}</span><small>${esc(prefSummary(x)) || 'No preference'}</small></button></li>`)
+        .join('')}</ul>
+    </section>
+    <section class="card">${
+      sel
+        ? `<div class="head"><h2>${esc(sel.name)}</h2><button class="sm ghost" data-act="clear-prefs">Clear</button></div>
+      <h3>Watch</h3>${toggles('blocks', BLOCK_NAMES, (i) => sel.pref.blocks.includes(i), [...BLOCKS])}
+      <h3>Position</h3>${toggles('pos', ['MOOW', 'Rover', 'Either'], (i) => sel.pref.pos === (['moow', 'rover', null] as const)[i])}
+      <h3>Days</h3>${toggles('days', WEEKDAYS.map((d) => d[0] + d.slice(1).toLowerCase()), (i) => sel.pref.days.includes(i))}
+      <p class="muted small">Saved as you tap. Used the next time you build. Watch counts most, then position, then days. Nothing is guaranteed: every watch still has to be filled.</p>`
+        : '<p class="muted">Pick a name to set what they prefer.</p>'
+    }</section></div>`;
+}
+
+// Build
 
 function billTab(): string {
   const p = ui.profile;
-  const planned = plannedDates();
-  const inRange = dateRange(ui.start, ui.end > ui.start ? ui.end : ui.start);
-  const existing = inRange.filter((d) => p.bills[d]);
-  const active = p.people.filter((x) => x.active).length;
+  const range = dateRange(ui.start, ui.end > ui.start ? ui.end : ui.start);
+  const existing = range.filter((d) => p.bills[d]);
+  const n = active().length;
+  const future = plannedDates().some((d) => d >= today());
   const c = counts(p.bills);
-  return `
-  <section class="card">
-    <h2>Dates</h2>
-    <div class="row2">
+  return `<section class="card">
+    <div class="head"><h2>Build</h2></div>
+    <div class="daterow">
       <label>From<input type="date" id="start" value="${ui.start}"></label>
       <label>To<input type="date" id="end" value="${ui.end}"></label>
+      <div class="chips"><button class="sm" data-range="1">1 day</button><button class="sm" data-range="7">1 week</button><button class="sm" data-range="14">2 weeks</button>
+      ${plannedDates().length ? `<button class="sm" data-act="extend">Next after ${militaryDate(plannedDates().pop()!)}</button>` : ''}</div>
     </div>
-    <div class="chips">
-      <button data-range="1">1 day</button><button data-range="7">1 week</button><button data-range="14">2 weeks</button>
-      ${planned.length ? `<button data-act="extend">Continue after ${militaryDate(planned[planned.length - 1])}</button>` : ''}
+    <div class="actions">
+      <button class="primary" data-act="generate" ${n ? '' : 'disabled'}>${existing.length ? `Rebuild ${range.length} day${range.length > 1 ? 's' : ''}` : `Generate ${range.length} day${range.length > 1 ? 's' : ''}`}</button>
+      ${existing.length ? `<button data-act="print">Print ${existing.length} page${existing.length > 1 ? 's' : ''}</button>` : ''}
     </div>
-    <button class="primary" data-act="generate" ${active ? '' : 'disabled'}>${existing.length ? `Rebuild ${inRange.length} day(s)` : `Generate ${inRange.length} day(s)`}</button>
-    ${active ? '' : '<p class="muted">Add names on the Roster tab first.</p>'}
-    ${existing.length ? `<p class="muted">${existing.length} of these days already have a bill. Rebuilding keeps as much of them as it can.</p>` : ''}
+    ${n ? '' : '<p class="muted small">Add people on the Roster tab first.</p>'}
+    ${existing.length ? '<p class="muted small">Rebuilding keeps as much of the current bill as it can.</p>' : ''}
   </section>
-  ${ui.warnings.length ? `<section class="card warn"><h2>Warnings</h2><ul>${ui.warnings.map((w) => `<li>${esc(w)}</li>`).join('')}</ul></section>` : ''}
-  <section class="card">
-    <div class="spread"><h2>Preview</h2>${existing.length ? `<button class="primary" data-act="print">Print ${existing.length} page(s)</button>` : ''}</div>
-    ${existing.length ? '<p class="muted">Tap a name to swap it with someone who keeps every rule. A ! marks a watch that broke a rule because nobody else was free.</p>' : '<p class="muted">No bills for these dates yet.</p>'}
-    <div class="sheets">${sheetsFor(inRange, p.bills, true)}</div>
-  </section>
-  ${c.size ? `<section class="card"><h2>Watch counts (all bills)</h2><div class="table-scroll"><table class="counts">
-    <tr><th>Name</th><th>Watches</th><th>2400-0600</th><th>Super</th><th>Double</th></tr>
+  ${p.prefsChanged && future ? `<div class="notice"><span>Preferences changed since the bills were built.</span><button class="sm primary" data-act="apply-prefs">Apply from today</button></div>` : ''}
+  ${ui.warnings.length ? `<details class="card warn" open><summary>${ui.warnings.length} warning${ui.warnings.length > 1 ? 's' : ''}</summary><ul>${ui.warnings.map((w) => `<li>${esc(w)}</li>`).join('')}</ul></details>` : ''}
+  ${existing.length ? `<p class="muted small center">Tap a name to swap it. <b>!</b> marks a watch that had to break a rule.</p>
+  <div class="sheets">${existing.map((d) => sheet(d, p.bills, true)).join('')}</div>` : ''}
+  ${c.size ? `<details class="card"><summary>Watch counts</summary><div class="table-scroll"><table class="counts">
+    <tr><th>Name</th><th>Watches</th><th>Nights</th><th>Super</th><th>Double</th></tr>
     ${p.people
       .filter((x) => c.has(x.id))
       .sort((a, b) => c.get(b.id)!.regular - c.get(a.id)!.regular)
@@ -233,158 +302,131 @@ function billTab(): string {
         const k = c.get(x.id)!;
         return `<tr><td>${esc(x.name)}</td><td>${k.regular}</td><td>${k.nights}</td><td>${k.supers}</td><td>${k.doubles || ''}</td></tr>`;
       })
-      .join('')}</table></div></section>` : ''}`;
+      .join('')}</table></div></details>` : ''}`;
 }
 
-function rosterTab(): string {
-  const p = ui.profile;
-  const sel = p.people.find((x) => x.id === ui.person);
-  return `
-  <section class="card">
-    <h2>Add names</h2>
-    <p class="muted">One per line, as it should print, with the room last: <code>SHAW, A. 164</code>. Rooms like <code>3910-548</code> or <code>O/B</code> work too.</p>
-    <textarea id="paste" rows="6" placeholder="LAST, F. 123"></textarea>
-    <button class="primary" data-act="add-names">Add</button>
-  </section>
-  <section class="card">
-    <h2>Roster (${p.people.filter((x) => x.active).length} active)</h2>
-    <div class="namelist">${p.people
-      .map((x) => `<button class="${x.active ? '' : 'inactive'} ${x.id === ui.person ? 'on' : ''}" data-person="${x.id}">${esc(x.name)}${x.room ? ` <small>${esc(x.room)}</small>` : ''}</button>`)
-      .join('')}</div>
-    ${sel ? `<div class="editor">
-      <div class="row2"><label>Name<input id="p-name" value="${esc(sel.name)}"></label><label>Room<input id="p-room" value="${esc(sel.room)}"></label></div>
-      <label class="check"><input type="checkbox" id="p-active" ${sel.active ? 'checked' : ''}> Active (off = left the section; kept in history)</label>
-      <div class="chips"><button class="primary" data-act="save-person">Save</button><button class="danger" data-act="delete-person">Remove</button></div>
-    </div>` : ''}
-  </section>`;
-}
-
-function toggles(group: string, items: string[], on: (i: number) => boolean) {
-  return `<div class="toggles">${items.map((l, i) => `<button class="${on(i) ? 'on' : ''}" data-toggle="${group}" data-i="${i}">${l}</button>`).join('')}</div>`;
-}
-
-let draft: Person | null = null;
-function prefsTab(): string {
-  const p = ui.profile;
-  const sel = p.people.find((x) => x.id === ui.person) ?? null;
-  if (sel && draft?.id !== sel.id) draft = structuredClone(sel);
-  if (!sel) draft = null;
-  return `<div class="split">
-    <section class="card namecol"><h2>Names</h2><div class="namelist vertical">${p.people
-      .filter((x) => x.active)
-      .map((x) => `<button class="${x.id === ui.person ? 'on' : ''}" data-person="${x.id}">${esc(x.name)}</button>`)
-      .join('')}</div></section>
-    <section class="card">${
-      draft
-        ? `<h2>${esc(draft.name)}</h2>
-      <h3>Position</h3>${toggles('pos', ['Moow', 'Rover', 'No preference'], (i) => (i === 0 ? draft!.pref.pos === 'moow' : i === 1 ? draft!.pref.pos === 'rover' : draft!.pref.pos === null))}
-      <h3>Watch</h3>${toggles('blocks', [...BLOCKS], (i) => draft!.pref.blocks.includes(i))}
-      <h3>Days</h3>${toggles('days', WEEKDAYS, (i) => draft!.pref.days.includes(i))}
-      <h3>Qualified for</h3>${toggles('elig', ['Moow', 'Rover', 'Super (Moow)', 'Super (Rover)'], (i) => [draft!.elig.moow, draft!.elig.rover, draft!.elig.superMoow, draft!.elig.superRover][i])}
-      <p class="muted">The watch preference counts most, then position, then day. None is guaranteed, because every watch must be filled. "Qualified for" is a hard rule.</p>
-      <button class="primary" data-act="save-prefs">Save and re-shift from today</button>`
-        : '<p class="muted">Pick a name.</p>'
-    }</section></div>`;
-}
+// Changes
 
 function personOptions() {
-  return ui.profile.people
-    .filter((x) => x.active)
+  return active()
     .map((x) => `<option value="${x.id}">${esc(x.name)}</option>`)
     .join('');
 }
+function dateOptions(selected = '') {
+  const t = today();
+  const dates = plannedDates();
+  const pick = selected || dates.find((d) => d >= t) || dates[dates.length - 1];
+  return dates.map((d) => `<option value="${d}" ${d === pick ? 'selected' : ''}>${longDate(d)}</option>`).join('');
+}
 
-const apptDraft = { blocks: [] as number[] };
 function changesTab(): string {
   const p = ui.profile;
-  return `
-  <section class="card">
-    <h2>Appointment</h2>
-    <p class="muted">Takes the person off the watches they'll miss and re-solves every day from that date on. Works on past dates too; then reprint.</p>
-    <label>Name<select id="a-person"><option value="">Pick a name</option>${personOptions()}</select></label>
-    <label>Date<input type="date" id="a-date" value="${today()}"></label>
-    <h3>Watches missed</h3>${toggles('appt', [...BLOCKS], (i) => apptDraft.blocks.includes(i))}
-    <label>Note (optional)<input id="a-note"></label>
-    <button class="primary" data-act="add-appt">Add appointment</button>
-    <ul class="list">${[...p.appointments]
+  const mode = ui.changesMode;
+  const seg = `<div class="seg">${(
+    [
+      ['appt', 'Appointment'],
+      ['double', 'Double watch'],
+      ['swap', 'Swap a name'],
+    ] as const
+  )
+    .map(([m, l]) => `<button class="${mode === m ? 'on' : ''}" data-mode="${m}">${l}</button>`)
+    .join('')}</div>`;
+  let body = '';
+  if (mode === 'appt') {
+    body = `<section class="card">
+      <p class="muted small">Takes the person off the watches they'll miss and re-balances every day from that date on. Earlier days stay as they are.</p>
+      <div class="form2">
+        <label>Name<select id="a-person"><option value="">Choose…</option>${personOptions()}</select></label>
+        <label>Date<select id="a-date">${dateOptions()}</select></label>
+      </div>
+      <h3>Watches missed</h3>${toggles('appt', BLOCK_NAMES, (i) => ui.apptBlocks.includes(i), [...BLOCKS])}
+      <label>Note <span class="muted">(optional)</span><input id="a-note"></label>
+      <div class="actions"><button class="primary" data-act="add-appt">Add appointment</button></div>
+    </section>
+    ${p.appointments.length ? `<section class="card"><h3>Appointments</h3><ul class="list">${[...p.appointments]
       .sort((a, b) => b.date.localeCompare(a.date))
-      .map((a) => `<li><span><b>${esc(name(a.personId))}</b> · ${longDate(a.date)} · ${a.blocks.map((b) => BLOCKS[b]).join(', ')}${a.note ? ` · ${esc(a.note)}` : ''}</span><button class="link" data-del-appt="${a.id}">remove</button></li>`)
-      .join('')}</ul>
-  </section>
-  <section class="card">
-    <h2>Double watch</h2>
-    <p class="muted">Discipline only. Adds one extra watch with just 6 hours of rest, marked DOUBLE on the bill and in history. Normal generation never does this.</p>
-    <label>Name<select id="d-person"><option value="">Pick a name</option>${personOptions()}</select></label>
-    <label>Date<input type="date" id="d-date" value="${today()}"></label>
-    <label>Watch<select id="d-block">${BLOCKS.map((b, i) => `<option value="${i}">${b}</option>`).join('')}</select></label>
-    <p class="muted" id="d-hint"></p>
-    <label>Reason (optional)<input id="d-note"></label>
-    <button class="primary" data-act="add-double">Assign double watch</button>
-    <ul class="list">${[...p.doubles]
+      .map((a) => `<li><span><b>${esc(name(a.personId))}</b> · ${longDate(a.date)} · ${a.blocks.map((b) => BLOCKS[b]).join(', ')}${a.note ? ` · ${esc(a.note)}` : ''}</span><button class="sm ghost" data-del-appt="${a.id}">Remove</button></li>`)
+      .join('')}</ul></section>` : ''}`;
+  } else if (mode === 'double') {
+    body = `<section class="card">
+      <p class="muted small">Discipline only: one extra watch with 6 hours of rest, marked DOUBLE on the bill. Normal builds never do this.</p>
+      <div class="form2">
+        <label>Name<select id="d-person"><option value="">Choose…</option>${personOptions()}</select></label>
+        <label>Date<select id="d-date">${dateOptions()}</select></label>
+        <label>Watch<select id="d-block">${BLOCKS.map((b, i) => `<option value="${i}">${BLOCK_NAMES[i]} ${b}</option>`).join('')}</select></label>
+        <label>Reason <span class="muted">(optional)</span><input id="d-note"></label>
+      </div>
+      <p class="muted small" id="d-hint"></p>
+      <div class="actions"><button class="primary" data-act="add-double">Assign double watch</button></div>
+    </section>
+    ${p.doubles.length ? `<section class="card"><h3>Double watches</h3><ul class="list">${[...p.doubles]
       .sort((a, b) => b.date.localeCompare(a.date))
-      .map((d) => `<li><span><b>${esc(name(d.personId))}</b> · ${longDate(d.date)} · ${BLOCKS[d.block]}${d.note ? ` · ${esc(d.note)}` : ''}</span><button class="link" data-del-double="${d.id}">remove</button></li>`)
-      .join('')}</ul>
-  </section>`;
+      .map((d) => `<li><span><b>${esc(name(d.personId))}</b> · ${longDate(d.date)} · ${BLOCKS[d.block]}${d.note ? ` · ${esc(d.note)}` : ''}</span><button class="sm ghost" data-del-double="${d.id}">Remove</button></li>`)
+      .join('')}</ul></section>` : ''}`;
+  } else {
+    const dates = plannedDates();
+    if (!dates.includes(ui.swapDate)) ui.swapDate = dates.find((d) => d >= today()) ?? dates[dates.length - 1];
+    body = `<section class="card">
+      <div class="form2"><label>Date<select id="s-date">${dateOptions(ui.swapDate)}</select></label></div>
+      <p class="muted small">Tap a name on the bill to replace it. Only people who keep every rest rule are offered.</p>
+    </section>
+    <div class="sheets">${sheet(ui.swapDate, p.bills, true)}</div>`;
+  }
+  return seg + body;
 }
 
-function setupTab(): string {
-  const s = ui.profile.settings;
-  const pair = (id: string, c: { label: string; phone: string }, labelText: string, placeholder: string) =>
-    `<div class="row2"><label>${labelText}<input data-set="${id}.label" value="${esc(c.label)}" placeholder="${placeholder}"></label>
-     <label>Phone<input data-set="${id}.phone" value="${esc(c.phone)}" inputmode="tel"></label></div>`;
-  return `
-  <section class="card"><h2>Duty section</h2>
-    <label>Duty section number<input data-set="section" value="${esc(s.section)}"></label>
-    ${pair('sectionLead', s.sectionLead, 'Duty section lead', 'Last name')}
-    ${s.deckLeads.map((c, i) => pair(`deckLeads.${i}`, c, `Deck lead ${i + 1}`, 'Last name')).join('')}
-    <label>Bill coordinator<input data-set="coordinator" value="${esc(s.coordinator)}"></label>
-  </section>
-  <section class="card"><h2>For emergencies</h2>
-    ${s.emergencies.map((c, i) => pair(`emergencies.${i}`, c, `Label ${i + 1}`, 'e.g. Base police')).join('')}
-  </section>
-  <section class="card"><h2>Standing orders</h2>
-    <p class="muted">One per line. Prints as a numbered list.</p>
-    <textarea data-set="notes" rows="10">${esc(s.notes)}</textarea>
-    <label>Bottom banner<input data-set="banner" value="${esc(s.banner)}" placeholder="e.g. Report 30 minutes before watch start"></label>
-  </section>
-  <p class="muted">Saved automatically and reused on every bill.</p>`;
-}
+// History
 
 function historyTab(): string {
-  const h = [...ui.profile.history].reverse();
-  const view = ui.profile.history.find((r) => r.id === ui.viewRevision);
-  return `
-  ${view ? `<section class="card"><div class="spread"><h2>${esc(view.reason)}</h2><span><button data-act="print-revision">Print</button> <button class="ghost" data-act="close-revision">Close</button></span></div>
-    <p class="muted">${new Date(view.at).toLocaleString()} · as it stood after this change</p>
-    <div class="sheets">${sheetsFor(view.dates, view.bills, false, view.reason)}</div></section>` : ''}
-  <section class="card"><h2>History</h2>
-    ${h.length ? '' : '<p class="muted">Nothing yet. Every generate and change is kept here.</p>'}
-    <ul class="list">${h
-      .map(
-        (r) => `<li><span><b>${esc(r.reason)}</b><br><small>${new Date(r.at).toLocaleString()} · ${r.dates.map(militaryDate).join(', ')}${
-          r.changedAfterPrint.length ? ` · <b class="flag">changed after printing: ${r.changedAfterPrint.map(militaryDate).join(', ')}</b>` : ''
-        }</small></span><button class="link" data-view="${r.id}">open</button></li>`,
-      )
-      .join('')}</ul>
-  </section>`;
+  const dates = plannedDates().reverse();
+  if (!dates.length) return '<section class="card"><p class="muted">Built bills show up here.</p></section>';
+  return `<section class="card"><div class="head"><h2>History</h2><span class="muted">${dates.length} day${dates.length > 1 ? 's' : ''}</span></div>
+  <div class="hist">${dates
+    .map((d) => {
+      const revs = revisionsOf(d);
+      const r = revs.length - 1;
+      return `<details data-date="${d}"><summary>
+        <span class="hd">${longDate(d)}</span>
+        <span class="tags">${r > 0 ? `<span class="pill">Rev ${r}</span>` : ''}${ui.profile.printed[d] ? '<span class="pill">Printed</span>' : ''}</span>
+      </summary>
+      <div class="hist-body">
+        <div class="actions"><button class="sm primary" data-edit-date="${d}">Edit</button><button class="sm" data-print-date="${d}">Print</button></div>
+        <div class="preview" data-preview="${d}"></div>
+        ${revs.length > 1 ? `<details class="versions"><summary>${revs.length} versions</summary><ul class="list">${[...revs]
+          .reverse()
+          .map((v, i) => `<li><span>${esc(v.reason)}<br><small class="muted">${new Date(v.at).toLocaleString()}${v.changedAfterPrint.includes(d) ? ' · changed after printing' : ''}</small></span><button class="sm ghost" data-version="${v.id}|${d}">${i === 0 ? 'Current' : 'View'}</button></li>`)
+          .join('')}</ul></details>` : ''}
+      </div></details>`;
+    })
+    .join('')}</div></section>`;
 }
 
-function backupTab(): string {
-  return `
-  <section class="card"><h2>Backup file</h2>
-    <p class="muted">Phone browsers can wipe site data, for example iPhone Safari after about a week unused unless the page is added to the Home Screen. Download a backup now and then. The file is encrypted with your save code.</p>
-    <button class="primary" data-act="download">Download backup</button>
+// Settings
+
+function settingsTab(): string {
+  const s = ui.profile.settings;
+  const person = (id: string, c: { label: string; phone: string }, label: string) =>
+    `<div class="form2"><label>${label}<input data-set="${id}.label" value="${esc(c.label)}" placeholder="Last name"></label>
+     <label>Phone<input data-set="${id}.phone" value="${esc(c.phone)}" inputmode="tel"></label></div>`;
+  return `<section class="card"><h2>Duty section</h2>
+    <div class="form2"><label>Section number<input data-set="section" value="${esc(s.section)}" inputmode="numeric"></label>
+    <label>Coordinator<input data-set="coordinator" value="${esc(s.coordinator)}" placeholder="Last name"></label></div>
+    ${person('sectionLead', s.sectionLead, 'Section lead')}
+    ${s.deckLeads.map((c, i) => person(`deckLeads.${i}`, c, `Deck lead ${i + 1}`)).join('')}
+    <p class="muted small">Saved as you type and printed on every bill. Emergency contacts and standing orders are built in.</p>
   </section>
-  <section class="card"><h2>Restore</h2>
-    <p class="muted">Replaces everything in this profile with the backup.</p>
-    <label>Backup file<input type="file" id="restore-file" accept=".json,application/json"></label>
-    <label>Save code for that backup<input id="restore-code" autocomplete="off" spellcheck="false"></label>
-    <button data-act="restore">Restore into this profile</button>
-  </section>
-  <section class="card"><h2>Delete</h2>
-    <p class="muted">Removes this profile from this device. Type DELETE to confirm.</p>
-    <input id="confirm-delete" autocomplete="off">
-    <button class="danger" data-act="delete-profile">Delete profile from this device</button>
+  <section class="card"><h2>Backup</h2>
+    <p class="muted small">Phones can clear website data (iPhone Safari after about a week unused unless the page is on the Home Screen). Download a backup now and then; it's encrypted with your save code.</p>
+    <div class="actions"><button data-act="download">Download backup</button></div>
+    <details><summary>Restore a backup</summary>
+      <label>Backup file<input type="file" id="restore-file" accept=".json,application/json"></label>
+      <label>Save code for that backup<input id="restore-code" autocomplete="off" spellcheck="false"></label>
+      <div class="actions"><button data-act="restore">Replace this profile with the backup</button></div>
+    </details>
+    <details><summary>Delete this profile from this device</summary>
+      <label>Type DELETE to confirm<input id="confirm-delete" autocomplete="off"></label>
+      <div class="actions"><button class="danger" data-act="delete-profile">Delete</button></div>
+    </details>
   </section>`;
 }
 
@@ -392,26 +434,15 @@ function backupTab(): string {
 function fitSheets() {
   fitNames(app);
   for (const wrap of document.querySelectorAll<HTMLElement>('.sheet-wrap')) {
-    const sheet = wrap.firstElementChild as HTMLElement;
-    const scale = Math.min(1, wrap.clientWidth / sheet.offsetWidth);
-    sheet.style.transform = `scale(${scale})`;
-    wrap.style.height = `${sheet.offsetHeight * scale}px`;
+    const sheetEl = wrap.firstElementChild as HTMLElement;
+    const scale = Math.min(1, wrap.clientWidth / sheetEl.offsetWidth);
+    sheetEl.style.transform = `scale(${scale})`;
+    wrap.style.height = `${sheetEl.offsetHeight * scale}px`;
   }
 }
 window.addEventListener('resize', fitSheets);
 
 // ---------- actions ----------
-
-function parseNames(text: string): Person[] {
-  return text
-    .split('\n')
-    .map((l) => l.trim())
-    .filter(Boolean)
-    .map((l) => {
-      const m = l.match(/^(.*?)\s+(\d[\w/-]*|O\/?B)$/i);
-      return m ? newPerson(m[1].trim().toUpperCase(), m[2].toUpperCase()) : newPerson(l.toUpperCase());
-    });
-}
 
 function download(filename: string, text: string) {
   const a = document.createElement('a');
@@ -456,11 +487,11 @@ function openSwap(date: string, block: number, role: Role) {
   const bill = p.bills[date];
   const cellIn = (b: DayBill): Cell => (block < 0 ? (role === 'superMoow' ? b.superMoow : b.superRover) : b.blocks[block][role as Pos]);
   const cell = cellIn(bill);
-  const where = `${longDate(date)} ${block >= 0 ? BLOCKS[block] + ' ' + POS_LABEL[role as Pos] : role === 'superMoow' ? 'SUPER (MOOW)' : 'SUPER (ROVER)'}`;
+  const where = `${longDate(date)} · ${block >= 0 ? `${BLOCKS[block]} ${POS_LABEL[role as Pos]}` : role === 'superMoow' ? 'Super (MOOW)' : 'Super (Rover)'}`;
   const dlg = document.createElement('dialog');
-  dlg.innerHTML = `<h2>Swap ${esc(name(cell.personId))}</h2><p class="muted">${where}${cell.forced ? `<br><b>Rule broken: ${esc(cell.forced)}</b>` : ''}</p>
-    ${options.length ? `<div class="namelist">${options.map((o) => `<button data-pick="${o.id}">${esc(o.name)}</button>`).join('')}</div>` : '<p>Nobody else can take this watch without breaking a rule.</p>'}
-    <button class="ghost" data-close>Cancel</button>`;
+  dlg.innerHTML = `<h2>Replace ${esc(name(cell.personId))}</h2><p class="muted small">${where}${cell.forced ? `<br><b>Rule broken: ${esc(cell.forced)}</b>` : ''}</p>
+    ${options.length ? `<ul class="pick">${options.map((o) => `<li><button data-pick="${o.id}"><span>${esc(o.name)}</span><small>${esc(o.room)}</small></button></li>`).join('')}</ul>` : '<p>Nobody else can take this watch without breaking a rest rule.</p>'}
+    <div class="actions"><button class="ghost" data-close>Cancel</button></div>`;
   document.body.append(dlg);
   dlg.showModal();
   dlg.addEventListener('click', (e) => {
@@ -473,7 +504,7 @@ function openSwap(date: string, block: number, role: Role) {
       c.personId = pick;
       delete c.forced;
       delete c.double;
-      commit({ [date]: next }, `Manual swap: ${from} → ${name(pick)}`);
+      commit({ [date]: next }, `Swap: ${from} → ${name(pick)}`);
     }
     if (pick || t.closest('[data-close]') || t === dlg) {
       dlg.close();
@@ -488,12 +519,50 @@ async function startSession(code: string) {
   askPersistent();
 }
 
+function addPerson() {
+  const n = document.querySelector<HTMLInputElement>('#n')!;
+  const r = document.querySelector<HTMLInputElement>('#r')!;
+  const nameText = n.value.trim().toUpperCase();
+  if (!nameText) return n.focus();
+  ui.profile.people.push(newPerson(nameText, r.value.trim().toUpperCase()));
+  changed();
+  render();
+  document.querySelector<HTMLInputElement>('#n')?.focus();
+}
+
+function prefsEdited() {
+  if (plannedDates().length) ui.profile.prefsChanged = true;
+  changed();
+  render();
+}
+
+function showPreview(d: string, bills: Bills, label?: string) {
+  const box = document.querySelector<HTMLElement>(`[data-preview="${d}"]`);
+  if (!box || !bills[d]) return;
+  box.innerHTML = sheet(d, bills, false, label);
+  fitSheets();
+}
+
+app.addEventListener('submit', (e) => {
+  if ((e.target as HTMLElement).id === 'add-person') {
+    e.preventDefault();
+    addPerson();
+  }
+});
+
+app.addEventListener('toggle', (e) => {
+  const det = e.target as HTMLDetailsElement;
+  const d = det.dataset?.date;
+  if (d && det.open && !det.querySelector('.sheet')) showPreview(d, ui.profile.bills);
+}, true);
+
 app.addEventListener('click', async (e) => {
   const t = e.target as HTMLElement;
   const btn = t.closest<HTMLElement>('button, [data-cell]');
   if (!btn) return;
   const d = btn.dataset;
   const p = ui.profile;
+  const sel = p.people.find((x) => x.id === ui.person);
 
   if (d.tab) {
     ui.tab = d.tab as Tab;
@@ -512,32 +581,50 @@ app.addEventListener('click', async (e) => {
     ui.person = d.person;
     return render();
   }
+  if (d.edit) {
+    ui.editing = d.edit;
+    render();
+    return document.querySelector<HTMLInputElement>('#e-name')?.focus();
+  }
+  if (d.restore) {
+    p.people.find((x) => x.id === d.restore)!.active = true;
+    changed();
+    return render();
+  }
+  if (d.mode) {
+    ui.changesMode = d.mode as typeof ui.changesMode;
+    return render();
+  }
   if (d.toggle === 'appt') {
     const i = Number(d.i);
-    apptDraft.blocks = apptDraft.blocks.includes(i) ? apptDraft.blocks.filter((x) => x !== i) : [...apptDraft.blocks, i].sort();
+    ui.apptBlocks = ui.apptBlocks.includes(i) ? ui.apptBlocks.filter((x) => x !== i) : [...ui.apptBlocks, i].sort();
     btn.classList.toggle('on');
     return;
   }
-  if (d.toggle && draft) {
+  if (d.toggle && sel) {
     const i = Number(d.i);
     const flip = (arr: number[]) => (arr.includes(i) ? arr.filter((x) => x !== i) : [...arr, i].sort());
-    if (d.toggle === 'pos') draft.pref.pos = (['moow', 'rover', null] as const)[i];
-    if (d.toggle === 'blocks') draft.pref.blocks = flip(draft.pref.blocks);
-    if (d.toggle === 'days') draft.pref.days = flip(draft.pref.days);
-    if (d.toggle === 'elig') {
-      const k = (['moow', 'rover', 'superMoow', 'superRover'] as const)[i];
-      draft.elig[k] = !draft.elig[k];
-    }
-    return render();
+    if (d.toggle === 'pos') sel.pref.pos = (['moow', 'rover', null] as const)[i];
+    if (d.toggle === 'blocks') sel.pref.blocks = flip(sel.pref.blocks);
+    if (d.toggle === 'days') sel.pref.days = flip(sel.pref.days);
+    return prefsEdited();
   }
-  if (d.view) {
-    ui.viewRevision = d.view;
+  if (d.editDate) {
+    ui.tab = 'bill';
+    ui.start = ui.end = d.editDate;
     render();
     return window.scrollTo(0, 0);
   }
+  if (d.printDate) return printDates([d.printDate], p.bills);
+  if (d.version) {
+    const [id, date] = d.version.split('|');
+    const v = p.history.find((x) => x.id === id)!;
+    const latest = revisionsOf(date).pop()?.id === id;
+    return showPreview(date, latest ? p.bills : v.bills, latest ? undefined : `${v.reason.split(':')[0]}, ${new Date(v.at).toLocaleDateString()}`);
+  }
   if (d.delAppt) {
     p.appointments = p.appointments.filter((a) => a.id !== d.delAppt);
-    ui.message = 'Appointment removed. The bill is unchanged; swap names by hand or rebuild if needed.';
+    ui.message = 'Appointment removed. The bill stays as it is; swap names or rebuild if needed.';
     changed();
     return render();
   }
@@ -585,7 +672,7 @@ app.addEventListener('click', async (e) => {
       }
       if (d.act === 'restore-login') await startSession(code);
       else if (!confirm('Replace everything in this profile with the backup?')) return;
-      ui.profile = restored;
+      ui.profile = migrate(restored);
       ui.message = 'Backup restored.';
       changed();
       return render();
@@ -605,9 +692,14 @@ app.addEventListener('click', async (e) => {
       return render();
     case 'generate': {
       const dates = dateRange(ui.start, ui.end > ui.start ? ui.end : ui.start);
-      runSolve(dates, `Generated ${militaryDate(dates[0])}–${militaryDate(dates[dates.length - 1])}`);
+      p.prefsChanged = false;
+      runSolve(dates, `Built ${militaryDate(dates[0])}${dates.length > 1 ? `–${militaryDate(dates[dates.length - 1])}` : ''}`);
       return render();
     }
+    case 'apply-prefs':
+      p.prefsChanged = false;
+      resolveFrom(today(), 'Preferences applied');
+      return render();
     case 'extend': {
       const last = plannedDates().pop()!;
       const len = Math.max(1, dateRange(ui.start, ui.end).length);
@@ -617,87 +709,68 @@ app.addEventListener('click', async (e) => {
     }
     case 'print':
       return printDates(dateRange(ui.start, ui.end), p.bills);
-    case 'print-revision': {
-      const r = p.history.find((x) => x.id === ui.viewRevision);
-      if (r) printDates(r.dates, r.bills, r.reason);
-      return;
-    }
-    case 'close-revision':
-      ui.viewRevision = null;
-      return render();
-    case 'add-names': {
-      const added = parseNames((document.querySelector('#paste') as HTMLTextAreaElement).value);
-      p.people.push(...added);
-      ui.message = `Added ${added.length} name(s).`;
-      changed();
-      return render();
-    }
     case 'save-person': {
-      const x = p.people.find((y) => y.id === ui.person)!;
-      x.name = (document.querySelector('#p-name') as HTMLInputElement).value.trim().toUpperCase() || x.name;
-      x.room = (document.querySelector('#p-room') as HTMLInputElement).value.trim().toUpperCase();
-      const wasActive = x.active;
-      x.active = (document.querySelector('#p-active') as HTMLInputElement).checked;
-      if (wasActive && !x.active) resolveFrom(today(), `${x.name} made inactive`);
+      const x = p.people.find((y) => y.id === ui.editing)!;
+      x.name = (document.querySelector('#e-name') as HTMLInputElement).value.trim().toUpperCase() || x.name;
+      x.room = (document.querySelector('#e-room') as HTMLInputElement).value.trim().toUpperCase();
+      ui.editing = null;
       changed();
       return render();
     }
-    case 'delete-person': {
-      const x = p.people.find((y) => y.id === ui.person)!;
-      const used = JSON.stringify(p.bills).includes(`"${x.id}"`) || JSON.stringify(p.history).includes(`"${x.id}"`);
+    case 'remove-person': {
+      const x = p.people.find((y) => y.id === ui.editing)!;
+      ui.editing = null;
+      const used = JSON.stringify(p.bills).includes(`"${x.id}"`);
       if (used) {
         x.active = false;
-        resolveFrom(today(), `${x.name} made inactive`);
-        ui.message = `${x.name} is on past bills, so they were made inactive instead of removed.`;
+        resolveFrom(today(), `${x.name} removed`);
       } else {
         p.people = p.people.filter((y) => y.id !== x.id);
-        ui.person = null;
+        changed();
       }
-      changed();
       return render();
     }
-    case 'save-prefs': {
-      const i = p.people.findIndex((y) => y.id === draft!.id);
-      p.people[i] = structuredClone(draft!);
-      resolveFrom(today(), `Preferences changed: ${draft!.name}`);
-      return render();
-    }
+    case 'clear-prefs':
+      if (sel) sel.pref = { pos: null, blocks: [], days: [] };
+      return prefsEdited();
     case 'add-appt': {
       const personId = (document.querySelector('#a-person') as HTMLSelectElement).value;
-      const date = (document.querySelector('#a-date') as HTMLInputElement).value;
-      if (!personId || !date || !apptDraft.blocks.length) {
-        ui.message = 'Pick a name, a date and at least one watch.';
+      const date = (document.querySelector('#a-date') as HTMLSelectElement).value;
+      if (!personId || !date || !ui.apptBlocks.length) {
+        ui.message = 'Choose a name, a date and at least one watch.';
         return render();
       }
-      p.appointments.push({ id: newId(), personId, date, blocks: apptDraft.blocks, note: (document.querySelector('#a-note') as HTMLInputElement).value });
-      apptDraft.blocks = [];
-      resolveFrom(date, `Appointment added: ${name(personId)} ${militaryDate(date)}`);
+      p.appointments.push({ id: newId(), personId, date, blocks: ui.apptBlocks, note: (document.querySelector('#a-note') as HTMLInputElement).value });
+      ui.apptBlocks = [];
+      resolveFrom(date, `Appointment: ${name(personId)} ${militaryDate(date)}`);
       return render();
     }
     case 'add-double': {
       const personId = (document.querySelector('#d-person') as HTMLSelectElement).value;
-      const date = (document.querySelector('#d-date') as HTMLInputElement).value;
+      const date = (document.querySelector('#d-date') as HTMLSelectElement).value;
       const block = Number((document.querySelector('#d-block') as HTMLSelectElement).value);
       if (!personId || !date) {
-        ui.message = 'Pick a name and a date.';
-        return render();
-      }
-      if (!p.bills[date]) {
-        ui.message = 'Generate the bill for that date first.';
+        ui.message = 'Choose a name and a date.';
         return render();
       }
       p.doubles.push({ id: newId(), personId, date, block, note: (document.querySelector('#d-note') as HTMLInputElement).value });
-      resolveFrom(date, `Double watch assigned: ${name(personId)} ${militaryDate(date)} ${BLOCKS[block]}`);
+      resolveFrom(date, `Double watch: ${name(personId)} ${militaryDate(date)} ${BLOCKS[block]}`);
       return render();
     }
   }
 });
 
 app.addEventListener('keydown', (e) => {
-  const cell = (e.target as HTMLElement).closest<HTMLElement>('[data-cell]');
+  const t = e.target as HTMLElement;
+  const cell = t.closest<HTMLElement>('[data-cell]');
   if (cell && (e.key === 'Enter' || e.key === ' ')) {
     e.preventDefault();
     cell.click();
+  }
+  if (e.key === 'Enter' && (t.id === 'e-name' || t.id === 'e-room')) document.querySelector<HTMLElement>('[data-act="save-person"]')?.click();
+  if (e.key === 'Escape' && ui.editing) {
+    ui.editing = null;
+    render();
   }
 });
 
@@ -719,20 +792,24 @@ app.addEventListener('change', (e) => {
     if (ui.end < ui.start) ui.end = ui.start;
     render();
   }
+  if (t.id === 's-date') {
+    ui.swapDate = t.value;
+    render();
+  }
   if (t.id === 'd-person' || t.id === 'd-date') doubleHint();
 });
 
 /** Show where the person already stands watch near that date, so the double lands 6 hours from one of them. */
 function doubleHint() {
   const pid = (document.querySelector('#d-person') as HTMLSelectElement)?.value;
-  const date = (document.querySelector('#d-date') as HTMLInputElement)?.value;
+  const date = (document.querySelector('#d-date') as HTMLSelectElement)?.value;
   const hint = document.querySelector('#d-hint');
   if (!hint || !pid || !date) return;
   const mine: string[] = [];
   for (const dd of [addDays(date, -1), date, addDays(date, 1)]) {
     ui.profile.bills[dd]?.blocks.forEach((row, i) => Object.values(row).forEach((c) => c.personId === pid && mine.push(`${militaryDate(dd)} ${BLOCKS[i]}`)));
   }
-  hint.textContent = mine.length ? `Already on: ${mine.join(', ')}. A double sits 6 hours from one of these.` : 'No watches near this date yet.';
+  hint.textContent = mine.length ? `Already on: ${mine.join(', ')}. Pick a watch 6 hours from one of these.` : 'No watches near this date.';
 }
 
 window.addEventListener('afterprint', () => (printArea.innerHTML = ''));

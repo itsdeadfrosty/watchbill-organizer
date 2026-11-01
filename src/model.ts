@@ -80,9 +80,6 @@ export interface Settings {
   sectionLead: Contact;
   deckLeads: Contact[];
   coordinator: string;
-  emergencies: Contact[];
-  notes: string;
-  banner: string;
 }
 
 export interface Profile {
@@ -96,6 +93,8 @@ export interface Profile {
   history: Revision[];
   /** date -> ISO time it was last printed */
   printed: Record<string, string>;
+  /** Preferences changed after the bills were last built. */
+  prefsChanged?: boolean;
 }
 
 export function newId(): string {
@@ -129,14 +128,20 @@ export function emptyProfile(): Profile {
         { label: '', phone: '' },
       ],
       coordinator: '',
-      emergencies: [0, 1, 2, 3].map(() => ({ label: '', phone: '' })),
-      notes: '',
-      banner: '',
     },
     bills: {},
     history: [],
     printed: {},
   };
+}
+
+/** Fill in anything an older saved profile is missing. */
+export function migrate(p: Profile): Profile {
+  const fresh = emptyProfile();
+  p.settings = { ...fresh.settings, ...p.settings };
+  p.printed ??= {};
+  for (const x of p.people) x.elig = { moow: true, rover: true, superMoow: true, superRover: true };
+  return p;
 }
 
 export function emptyBill(date: string): DayBill {

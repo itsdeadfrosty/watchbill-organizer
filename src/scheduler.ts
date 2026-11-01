@@ -396,7 +396,8 @@ export function solve(input: SolveInput): SolveResult {
       .sort((x, y) => x - y);
     for (let i = 1; i < days.length; i++) if (days[i] - days[i - 1] === 1 && solving.has(dateOfDn(st, p.id, days[i]))) nextDay++;
   }
-  if (nextDay) warnings.push(`${nextDay} time(s) someone has duty on back-to-back days. Adding names spreads watches out.`);
+  // 14 duties a day: with fewer than 28 people some back-to-back days can't be avoided, so only mention it when they could be.
+  if (nextDay && watchable.length >= 28) warnings.push(`${nextDay} time(s) someone has duty on back-to-back days. Adding names spreads watches out.`);
   return { bills, warnings };
 }
 
