@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>602 Watchbill Redesign</title>
+<style>
+  @page { size: letter landscape; margin: 0.35in; }
+  * { box-sizing: border-box; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  :root { --ink:#111; --line:#222; --soft:#888; --fill:#e6e6e6; --fill2:#f3f3f3; }
+  body { margin:0; background:#cfcfcf; font-family: "Arial Narrow", Arial, Helvetica, sans-serif; color:var(--ink); }
+  .sheet { width:10.3in; height:7.8in; margin:16px auto; background:#fff; padding:0.18in 0.22in;
+           display:flex; flex-direction:column; gap:7px; box-shadow:0 2px 10px rgba(0,0,0,.25); }
+  @media print { body{background:#fff} .sheet{margin:0; box-shadow:none; page-break-after:always} }
+  @media screen and (max-width:1050px){ .sheet{ transform-origin: top left; } }
+
+  /* header */
+  .head { display:grid; grid-template-columns: 1.4fr 3fr 1.6fr; border:2px solid var(--line); }
+  .head > div { padding:5px 9px; }
+  .head .title { background:var(--fill); border-left:2px solid var(--line); border-right:2px solid var(--line);
+                 text-align:center; font-weight:900; font-size:24px; letter-spacing:3px; display:flex; align-items:center; justify-content:center; }
+  .lbl { font-size:9px; font-weight:700; letter-spacing:.6px; color:#444; text-transform:uppercase; }
+  .big { font-size:22px; font-weight:900; line-height:1.05; }
+  .sub { font-size:10px; color:#333; }
+
+  /* supers band */
+  .supers { display:grid; grid-template-columns: 1fr 1fr; border:2px solid var(--line); }
+  .supers > div { display:grid; grid-template-columns: 1.1in 1fr .75in .75in; align-items:center; }
+  .supers > div + div { border-left:2px solid var(--line); }
+  .supers .role { background:var(--fill); height:100%; padding:4px 7px; font-weight:900; font-size:11px; line-height:1.15; border-right:1px solid var(--line);}
+  .supers .role small { display:block; font-weight:700; font-size:9px; color:#444; }
+  .cellname { font-size:17px; font-weight:800; padding:4px 8px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .cellbox { border-left:1px solid var(--line); height:100%; padding:2px 5px; }
+
+  /* main grid */
+  table.grid { width:100%; border-collapse:collapse; table-layout:fixed; border:2px solid var(--line); }
+  .grid th, .grid td { border:1px solid var(--line); }
+  .grid thead th { background:var(--fill); font-size:10px; font-weight:900; letter-spacing:.5px; padding:3px 2px; }
+  .grid thead tr:first-child th { font-size:12px; }
+  .grid thead tr:first-child th small { font-weight:700; font-size:9px; color:#444; }
+  .grid td { height:0.62in; padding:0 7px; vertical-align:middle; }
+  .grid .gstart { border-left:2.5px solid var(--line); }
+  .grid tbody tr:nth-child(even) td:not(.time) { background:var(--fill2); }
+  .time { background:var(--fill); text-align:center; }
+  .time b { display:block; font-size:16px; font-weight:900; }
+  .time span { display:block; font-size:9px; color:#333; }
+  .name { font-size:19px; font-weight:800; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .room { font-size:14px; font-weight:700; text-align:center; padding:0 2px !important; }
+  .int  { text-align:center; }
+  .tag { display:inline-block; border:1.5px solid var(--ink); font-size:9px; font-weight:900; padding:0 3px; margin-left:5px; vertical-align:middle; letter-spacing:.5px; }
+
+  /* lower */
+  .lower { display:grid; grid-template-columns: 2.35in 2.35in 1fr; gap:7px; flex:1; min-height:0; }
+  .box { border:2px solid var(--line); display:flex; flex-direction:column; }
+  .box h3 { margin:0; background:var(--fill); font-size:10.5px; font-weight:900; letter-spacing:.6px; padding:4px 7px; border-bottom:1.5px solid var(--line); }
+  .row { display:flex; justify-content:space-between; align-items:baseline; gap:6px; padding:4px 7px; border-bottom:1px solid #bbb; }
+  .row:last-child { border-bottom:none; }
+  .row .k { font-size:10px; font-weight:700; text-transform:uppercase; }
+  .row .v { font-size:14px; font-weight:800; white-space:nowrap; }
+  .row .who { font-size:13px; font-weight:800; }
+  ol.notes { margin:0; padding:5px 10px 5px 26px; columns:2; column-gap:18px; font-size:10.4px; line-height:1.3; }
+  ol.notes li { break-inside:avoid; margin-bottom:4px; }
+  .banner { border:2px solid var(--line); background:var(--fill); text-align:center; font-weight:900; font-size:13px; letter-spacing:.8px; padding:5px; }
+  .foot { display:flex; justify-content:space-between; font-size:9px; color:#444; }
+</style>
+</head>
+<body>
+<div class="sheet">
+
+  <div class="head">
+    <div><div class="lbl">Duty Section</div><div class="big">1</div></div>
+    <div class="title">602 WATCHBILL</div>
+    <div style="text-align:right">
+      <div class="lbl">Duty Day</div>
+      <div class="big">SAT 01 NOV 26</div>
+      <div class="sub">0600 Sat &rarr; 0600 Sun 02 NOV &nbsp;·&nbsp; <b>REV 1</b> (appointment)</div>
+    </div>
+  </div>
+
+  <div class="supers">
+    <div>
+      <div class="role">SUPER (MOOW)<small>NSU · all day</small></div>
+      <div class="cellname">CARTER, J.</div>
+      <div class="cellbox"><div class="lbl">Room</div><b>214</b></div>
+      <div class="cellbox"><div class="lbl">Int</div></div>
+    </div>
+    <div>
+      <div class="role">SUPER (ROVER)<small>NWU · all day</small></div>
+      <div class="cellname">OKONKWO-MARTINEZ, D.</div>
+      <div class="cellbox"><div class="lbl">Room</div><b>131</b></div>
+      <div class="cellbox"><div class="lbl">Int</div></div>
+    </div>
+  </div>
+
+  <table class="grid">
+    <colgroup>
+      <col style="width:1.05in">
+      <col><col style="width:.62in"><col style="width:.62in">
+      <col><col style="width:.62in"><col style="width:.62in">
+      <col><col style="width:.62in"><col style="width:.62in">
+    </colgroup>
+    <thead>
+      <tr>
+        <th rowspan="2">WATCH<br><small>(report 30 min prior)</small></th>
+        <th colspan="3" class="gstart">MOOW <small>· NSU</small></th>
+        <th colspan="3" class="gstart">ROVER 1 <small>· NWU</small></th>
+        <th colspan="3" class="gstart">ROVER 2 <small>· NWU</small></th>
+      </tr>
+      <tr>
+        <th class="gstart">NAME</th><th>ROOM</th><th>INT</th>
+        <th class="gstart">NAME</th><th>ROOM</th><th>INT</th>
+        <th class="gstart">NAME</th><th>ROOM</th><th>INT</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td class="time"><b>0600–1200</b><span>report 0530</span></td>
+        <td class="name gstart">ALVAREZ, M.</td><td class="room">102</td><td class="int"></td>
+        <td class="name gstart">BROOKS, T.</td><td class="room">118</td><td class="int"></td>
+        <td class="name gstart">NGUYEN, P.</td><td class="room">245</td><td class="int"></td>
+      </tr>
+      <tr>
+        <td class="time"><b>1200–1800</b><span>report 1130</span></td>
+        <td class="name gstart">DIAZ, R.</td><td class="room">207</td><td class="int"></td>
+        <td class="name gstart">ELLISON, K.</td><td class="room">3910-548</td><td class="int"></td>
+        <td class="name gstart">FOSTER, L.</td><td class="room">O/B</td><td class="int"></td>
+      </tr>
+      <tr>
+        <td class="time"><b>1800–2400</b><span>report 1730</span></td>
+        <td class="name gstart">GARCIA, S.</td><td class="room">163</td><td class="int"></td>
+        <td class="name gstart">HAYES, B.<span class="tag">DOUBLE</span></td><td class="room">270</td><td class="int"></td>
+        <td class="name gstart">IBRAHIM, A.</td><td class="room">283</td><td class="int"></td>
+      </tr>
+      <tr>
+        <td class="time"><b>2400–0600</b><span>Sun 02 NOV · rpt 2330</span></td>
+        <td class="name gstart">JOHANSSON, E.</td><td class="room">249</td><td class="int"></td>
+        <td class="name gstart">KIM, W.</td><td class="room">166</td><td class="int"></td>
+        <td class="name gstart">LOPEZ, D.</td><td class="room">277</td><td class="int"></td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="lower">
+    <div class="box">
+      <h3>FOR EMERGENCIES</h3>
+      <div class="row"><span class="k">Duty office A</span><span class="v">555-010-0001</span></div>
+      <div class="row"><span class="k">Duty office B</span><span class="v">555-010-0002</span></div>
+      <div class="row"><span class="k">Base police</span><span class="v">555-010-0003</span></div>
+      <div class="row"><span class="k">Fire / EMT</span><span class="v">555-010-0004</span></div>
+    </div>
+    <div class="box">
+      <h3>CHAIN OF COMMAND</h3>
+      <div class="row"><span><span class="k">Duty section lead</span><br><span class="who">REYES</span></span><span class="v">555-020-0001</span></div>
+      <div class="row"><span><span class="k">Deck lead</span><br><span class="who">MORGAN</span></span><span class="v">555-020-0002</span></div>
+      <div class="row"><span><span class="k">Deck lead</span><br><span class="who">PATEL</span></span><span class="v">555-020-0003</span></div>
+      <div class="row" style="font-size:9.5px;font-weight:700">Watchbill issues go to your deck leads first.</div>
+    </div>
+    <div class="box">
+      <h3>STANDING ORDERS</h3>
+      <ol class="notes">
+        <li>Failure to follow watch rules = formal documentation. Two red marks may result in a PRB.</li>
+        <li>Report conflicts, appointments or discrepancies through your chain of command.</li>
+        <li>Change requests go to your chain of command, not staff or student staff.</li>
+        <li>Missing, late or not communicating: double watch, red marks, etc.</li>
+        <li>Bills are posted 24 h before the duty day. Initial (INT) your watch or face discipline.</li>
+        <li>Supers are present at turnover at their watch time.</li>
+        <li>MOOW gets one 15-min break per watch; a rover holds the podium.</li>
+        <li>MOOW stands the whole watch unless LD, LLD or LIMDU.</li>
+        <li>Rovers rove continuously and report to the MOOW every 30 min.</li>
+        <li>No chow relief.</li>
+      </ol>
+    </div>
+  </div>
+
+  <div class="banner">ALL WATCH STANDERS, SUPERS INCLUDED, REPORT 30 MINUTES BEFORE WATCH START</div>
+  <div class="foot"><span>Coordinator: ______ · Posted: 31 OCT 26 0600</span><span>Sample data — fake names and numbers</span></div>
+</div>
+</body>
+</html>
